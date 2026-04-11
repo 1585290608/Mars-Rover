@@ -1,7 +1,12 @@
-#include <SPI.h>
-#include <LoRa.h>
+#include <MKRWAN.h>
 
-const long LORA_FREQ = 868E6;
+LoRaModem modem;
+
+const unsigned long USB_BAUD = 9600;
+const int MODEM_DATA_RATE = 5;
+const int MODEM_PORT = 1;
+const int MODEM_CHANNEL = 0;
+
 String usbLine;
 
 bool isHexNibble(char c) {
@@ -50,14 +55,27 @@ void trace(const String &message) {
   Serial.println(message);
 }
 
-void setup() {
-  Serial.begin(9600);
-  while (!Serial) {
+bool configureModem() {
+  if (!modem.begin(EU868)) {
+    return false;
   }
 
+  modem.dataRate(MODEM_DATA_RATE);
+  modem.setPort(MODEM_PORT);
+  modem.setChannel(MODEM_CHANNEL);
+  return true;
+}
+
+void setup() {
+  Serial.begin(USB_BAUD);
+  unsigned long waitStarted = millis();
+  while (!Serial && millis() - waitStarted < 2500) {
+  }
+
+  delay(2000);
   trace("BOOT:PC_LORA_START");
 
-  if (!LoRa.begin(LORA_FREQ)) {
+  if (!configureModem()) {
     trace("LORA_INIT_FAILED");
     while (1) {
       delay(1000);
@@ -65,6 +83,9 @@ void setup() {
   }
 
   trace("LORA_INIT_OK");
+  trace(String("MODEM_DR:") + MODEM_DATA_RATE);
+  trace(String("MODEM_PORT:") + MODEM_PORT);
+  trace(String("MODEM_CHANNEL:") + MODEM_CHANNEL);
   trace("READY:TYPE_COMMAND_AND_PRESS_ENTER");
 }
 
@@ -85,24 +106,37 @@ void loop() {
     usbLine += c;
   }
 
-  int packetSize = LoRa.parsePacket();
+  int packetSize = modem.parsePacket();
   if (packetSize > 0) {
-    String incoming = LoRa.readString();
+    String incoming = modem.readString();
     incoming.trim();
+    incoming.toUpperCase();
     if (incoming.length() > 0) {
-      Serial.print("RX: ");
-      Serial.println(incoming);
+      if (incoming.startsWith("RESP:") || incoming.startsWith("DATA:") || looksLikeCompactFrame(incoming)) {
+        Serial.print("RX: ");
+        Serial.println(incoming);
+      } else {
+        trace(String("IGNORED_LORA_PAYLOAD:") + incoming);
+      }
     }
   }
 }
 
 void sendLoRa(const String &payload) {
   String wirePayload = encodeCommand(payload);
+  if (wirePayload.length() == 0) {
+    return;
+  }
+
   if (wirePayload != payload) {
     trace(String("ENCODE:") + payload + "->" + wirePayload);
   }
+
   trace(String("LOCAL_TX:") + wirePayload);
-  LoRa.beginPacket();
-  LoRa.print(wirePayload);
-  LoRa.endPacket();
+  modem.beginPacket();
+  modem.print(wirePayload);
+  int result = modem.endPacket(false);
+  if (result <= 0) {
+    trace(String("TX_FAIL:") + wirePayload);
+  }
 }

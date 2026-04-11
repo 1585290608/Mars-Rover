@@ -172,19 +172,26 @@ class PCLoraGUI(tk.Tk):
         self.log("Ports refreshed: " + (", ".join(ports) if ports else "none found"))
 
     def connect_port(self) -> None:
+        if self.conn is not None:
+            self.log("Closing existing PC_Lora connection before reconnect", "debug")
+            self._close_conn()
         self.conn = self._connect_port(self.port_var.get(), "PC_Lora")
         self._update_status()
 
     def disconnect_port(self) -> None:
+        self._close_conn()
+        self._clear_pending("Disconnected")
+        self._update_status()
+        self.log("Disconnected PC_Lora")
+
+    def _close_conn(self) -> None:
         if self.conn is not None:
             try:
                 self.conn.close()
             except (SerialException, OSError):
                 pass
         self.conn = None
-        self._clear_pending("Disconnected")
-        self._update_status()
-        self.log("Disconnected PC_Lora")
+        self.rx_buffer.clear()
 
     def _connect_port(self, selection: str, label: str):
         if serial is None:
@@ -204,6 +211,11 @@ class PCLoraGUI(tk.Tk):
 
         try:
             conn = serial.Serial(port=port, baudrate=baud, timeout=0, write_timeout=0.5)
+            try:
+                conn.reset_input_buffer()
+                conn.reset_output_buffer()
+            except (SerialException, OSError, AttributeError):
+                pass
             self.log(f"{label} connected to {port} @ {baud}")
             return conn
         except (SerialException, OSError, ValueError) as exc:
@@ -235,7 +247,7 @@ class PCLoraGUI(tk.Tk):
             self.log_tx(tx_text or wire_command)
         except (SerialException, OSError) as exc:
             self.log_rx(f"Send failed: {exc}", "error")
-            self.conn = None
+            self._close_conn()
             self._clear_pending("Disconnected after send failure")
             self._update_status()
 
@@ -246,7 +258,7 @@ class PCLoraGUI(tk.Tk):
                 chunk = self.conn.read(waiting or 1)
             except (SerialException, OSError) as exc:
                 self.log(f"Read failed: {exc}", "error")
-                self.conn = None
+                self._close_conn()
                 self._clear_pending("Disconnected after read failure")
                 self._update_status()
             else:
@@ -412,11 +424,7 @@ class PCLoraGUI(tk.Tk):
         self.set_indicator(self.accel_indicator, "warn")
 
     def on_close(self) -> None:
-        if self.conn is not None:
-            try:
-                self.conn.close()
-            except (SerialException, OSError):
-                pass
+        self._close_conn()
         self.destroy()
 
 

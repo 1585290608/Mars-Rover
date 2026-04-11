@@ -1,9 +1,13 @@
-#include <SPI.h>
-#include <LoRa.h>
+#include <MKRWAN.h>
 
-const long LORA_FREQ = 868E6;
-const unsigned long R3_RESPONSE_TIMEOUT_MS = 5000;
+LoRaModem modem;
+
+const unsigned long USB_BAUD = 9600;
 const unsigned long R3_UART_BAUD = 4800;
+const unsigned long R3_RESPONSE_TIMEOUT_MS = 5000;
+const int MODEM_DATA_RATE = 5;
+const int MODEM_PORT = 1;
+const int MODEM_CHANNEL = 0;
 
 String r3Line;
 String usbLine;
@@ -29,18 +33,66 @@ bool looksLikeCompactFrame(const String &text) {
   return text.length() == 2 || text.charAt(2) == '|';
 }
 
+bool isAllowedRequestCode(const String &code) {
+  return code == "0A" || code == "0B" || code == "0C" || code == "0D" ||
+         code == "0E" || code == "10" || code == "11" || code == "12" ||
+         code == "13" || code == "14" || code == "15";
+}
+
+bool isAllowedTextCommand(const String &text) {
+  return text == "HELLO" || text == "STATUS" || text == "READ_ACCEL" ||
+         text == "LED_ON" || text == "LED_OFF" || text == "FORWARD" ||
+         text == "BACKWARD" || text == "LEFT" || text == "RIGHT" ||
+         text == "STOP" || text == "PING";
+}
+
+String normalizeCommand(const String &incoming) {
+  String normalized = incoming;
+  normalized.trim();
+  normalized.toUpperCase();
+  return normalized;
+}
+
+bool isAllowedInboundCommand(const String &incoming) {
+  String normalized = normalizeCommand(incoming);
+  if (normalized.length() == 0) {
+    return false;
+  }
+
+  if (looksLikeCompactFrame(normalized)) {
+    return isAllowedRequestCode(normalized.substring(0, 2));
+  }
+
+  return isAllowedTextCommand(normalized);
+}
+
 void trace(const String &message) {
   Serial.print("TRACE:");
   Serial.println(message);
 }
 
-void setup() {
-  Serial.begin(9600);
-  Serial1.begin(R3_UART_BAUD);
+bool configureModem() {
+  if (!modem.begin(EU868)) {
+    return false;
+  }
 
+  modem.dataRate(MODEM_DATA_RATE);
+  modem.setPort(MODEM_PORT);
+  modem.setChannel(MODEM_CHANNEL);
+  return true;
+}
+
+void setup() {
+  Serial.begin(USB_BAUD);
+  unsigned long waitStarted = millis();
+  while (!Serial && millis() - waitStarted < 2500) {
+  }
+
+  Serial1.begin(R3_UART_BAUD);
+  delay(2000);
   trace("BOOT:ROVER_LORA_START");
 
-  if (!LoRa.begin(LORA_FREQ)) {
+  if (!configureModem()) {
     trace("LORA_INIT_FAILED");
     while (1) {
       delay(1000);
@@ -48,6 +100,9 @@ void setup() {
   }
 
   trace("LORA_INIT_OK");
+  trace(String("MODEM_DR:") + MODEM_DATA_RATE);
+  trace(String("MODEM_PORT:") + MODEM_PORT);
+  trace(String("MODEM_CHANNEL:") + MODEM_CHANNEL);
   trace("USB_MONITOR_ONLY");
   trace(String("R3_UART_BAUD:") + R3_UART_BAUD);
 }
@@ -69,17 +124,21 @@ void loop() {
     usbLine += c;
   }
 
-  int packetSize = LoRa.parsePacket();
+  int packetSize = modem.parsePacket();
   if (packetSize > 0) {
-    String incoming = LoRa.readString();
-    incoming.trim();
+    String incoming = modem.readString();
+    incoming = normalizeCommand(incoming);
     if (incoming.length() > 0) {
       trace(String("LORA_RX:") + incoming);
-      trace(String("UART_TX:") + incoming);
-      Serial1.println(incoming);
-      pendingCommand = incoming;
-      lastCommandMillis = millis();
-      waitingForR3 = true;
+      if (isAllowedInboundCommand(incoming)) {
+        trace(String("UART_TX:") + incoming);
+        Serial1.println(incoming);
+        pendingCommand = incoming;
+        lastCommandMillis = millis();
+        waitingForR3 = true;
+      } else {
+        trace(String("DROP_INVALID_LORA_PAYLOAD:") + incoming);
+      }
     }
   }
 
@@ -96,6 +155,8 @@ void loop() {
           sendLoRa(r3Line);
           waitingForR3 = false;
           pendingCommand = "";
+        } else {
+          trace(String("DROP_INVALID_R3_PAYLOAD:") + r3Line);
         }
         r3Line = "";
       }
@@ -113,7 +174,10 @@ void loop() {
 
 void sendLoRa(const String &payload) {
   trace(String("LORA_TX:") + payload);
-  LoRa.beginPacket();
-  LoRa.print(payload);
-  LoRa.endPacket();
+  modem.beginPacket();
+  modem.print(payload);
+  int result = modem.endPacket(false);
+  if (result <= 0) {
+    trace(String("LORA_TX_FAIL:") + payload);
+  }
 }

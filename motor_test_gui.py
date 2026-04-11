@@ -203,10 +203,16 @@ class MotorTestGUI(tk.Tk):
         self.log("Ports refreshed: " + (", ".join(ports) if ports else "none found"))
 
     def connect_pc_lora(self) -> None:
+        if self.pc_lora_conn is not None:
+            self.log("Closing existing PC_Lora connection before reconnect", "debug")
+            self._close_conn("PC_Lora")
         self.pc_lora_conn = self._connect_port(self.pc_lora_port_var.get(), "PC_Lora")
         self._update_status()
 
     def connect_rover_lora(self) -> None:
+        if self.rover_lora_conn is not None:
+            self.log("Closing existing Rover_Lora monitor connection before reconnect", "debug")
+            self._close_conn("Rover_Lora")
         self.rover_lora_conn = self._connect_port(self.rover_lora_port_var.get(), "Rover_Lora monitor")
         self._update_status()
 
@@ -228,6 +234,11 @@ class MotorTestGUI(tk.Tk):
 
         try:
             conn = serial.Serial(port=port, baudrate=baud, timeout=0, write_timeout=0.5)
+            try:
+                conn.reset_input_buffer()
+                conn.reset_output_buffer()
+            except (SerialException, OSError, AttributeError):
+                pass
             self.log(f"{label} connected to {port} @ {baud}")
             return conn
         except (SerialException, OSError, ValueError) as exc:
@@ -235,15 +246,25 @@ class MotorTestGUI(tk.Tk):
             self.log(f"{label} connect failed: {exc}", "error")
             return None
 
+    def _close_conn(self, label: str) -> None:
+        if label == "PC_Lora":
+            conn = self.pc_lora_conn
+            self.pc_lora_conn = None
+            self.pc_lora_rx_buffer.clear()
+        else:
+            conn = self.rover_lora_conn
+            self.rover_lora_conn = None
+            self.rover_lora_rx_buffer.clear()
+
+        if conn is not None:
+            try:
+                conn.close()
+            except (SerialException, OSError):
+                pass
+
     def disconnect_all(self) -> None:
-        for conn in (self.pc_lora_conn, self.rover_lora_conn):
-            if conn is not None:
-                try:
-                    conn.close()
-                except (SerialException, OSError):
-                    pass
-        self.pc_lora_conn = None
-        self.rover_lora_conn = None
+        self._close_conn("PC_Lora")
+        self._close_conn("Rover_Lora")
         self._clear_pending("Disconnected")
         self.set_indicator(self.lora_indicator, "warn")
         self._update_status()
@@ -281,7 +302,7 @@ class MotorTestGUI(tk.Tk):
             self.log(f"{label} TX: {tx_text or wire_command}")
         except (SerialException, OSError) as exc:
             self.log(f"{label} send failed: {exc}", "error")
-            self.pc_lora_conn = None
+            self._close_conn("PC_Lora")
             self._clear_pending("Disconnected after send failure")
             self.set_indicator(self.lora_indicator, "bad")
             self._update_status()
@@ -308,11 +329,11 @@ class MotorTestGUI(tk.Tk):
         except (SerialException, OSError) as exc:
             self.log(f"{label} read failed: {exc}", "error")
             if label == "PC_Lora":
-                self.pc_lora_conn = None
+                self._close_conn("PC_Lora")
                 self._clear_pending("Disconnected after read failure")
                 self.set_indicator(self.lora_indicator, "bad")
             else:
-                self.rover_lora_conn = None
+                self._close_conn("Rover_Lora")
             self._update_status()
             return
 
