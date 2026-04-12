@@ -1,9 +1,12 @@
+import csv
+import threading
 import time
 import tkinter as tk
 from datetime import datetime
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from compact_protocol import (
+    REQUEST_TO_CODE,
     SENSOR_LED_QUICK_COMMANDS,
     button_label,
     decode_response_frame,
@@ -48,6 +51,15 @@ class PCLoraGUI(tk.Tk):
         self.accel_value_var = tk.StringVar(value="ACCEL: N/A")
         self.accel_ind_state = tk.StringVar(value="UNKNOWN")
         self.command_var = tk.StringVar()
+
+        self.test_mode_var = tk.StringVar(value="sequential")
+        self.test_interval_var = tk.StringVar(value="0.25")
+        self.test_attempts_var = tk.StringVar(value="10")
+        self.test_repeats_var = tk.StringVar(value="5")
+        self.test_status_var = tk.StringVar(value="Ready")
+        self.test_running = False
+        self.test_rx_buffer = bytearray()
+        self.last_latency_results: dict[str, list[int | None]] | None = None
 
         self.pending_command = ""
         self.pending_started_at = None
@@ -126,6 +138,44 @@ class PCLoraGUI(tk.Tk):
 
         ttk.Entry(command_frame, textvariable=self.command_var).grid(row=1, column=0, padx=8, pady=8, sticky="ew")
         ttk.Button(command_frame, text="Send", command=self.send_command).grid(row=1, column=1, padx=8, pady=8)
+
+        test_frame = ttk.LabelFrame(body, text="Latency Test")
+        test_frame.grid(row=1, column=0, columnspan=3, sticky="ew", padx=(0, 12), pady=(12, 0))
+        test_frame.columnconfigure(1, weight=1)
+        test_frame.columnconfigure(3, weight=1)
+
+        ttk.Label(test_frame, text="Mode:").grid(row=0, column=0, padx=8, pady=8, sticky="w")
+        self.mode_box = ttk.Combobox(
+            test_frame,
+            textvariable=self.test_mode_var,
+            values=("sequential", "interval"),
+            state="readonly",
+            width=12,
+        )
+        self.mode_box.grid(row=0, column=1, padx=8, pady=8, sticky="w")
+
+        ttk.Label(test_frame, text="Interval (s):").grid(row=0, column=2, padx=8, pady=8, sticky="w")
+        ttk.Entry(test_frame, textvariable=self.test_interval_var, width=8).grid(row=0, column=3, padx=8, pady=8, sticky="w")
+
+        ttk.Label(test_frame, text="Attempts:").grid(row=1, column=0, padx=8, pady=(0, 8), sticky="w")
+        ttk.Entry(test_frame, textvariable=self.test_attempts_var, width=8).grid(row=1, column=1, padx=8, pady=(0, 8), sticky="w")
+
+        ttk.Label(test_frame, text="Repeats:").grid(row=1, column=2, padx=8, pady=(0, 8), sticky="w")
+        ttk.Entry(test_frame, textvariable=self.test_repeats_var, width=8).grid(row=1, column=3, padx=8, pady=(0, 8), sticky="w")
+
+        self.test_button = ttk.Button(test_frame, text="Start Latency Test", command=self.start_latency_test)
+        self.test_button.grid(row=2, column=0, columnspan=2, padx=8, pady=(0, 8), sticky="ew")
+        ttk.Button(test_frame, text="Export CSV", command=self.export_latency_csv).grid(
+            row=2, column=2, padx=8, pady=(0, 8), sticky="ew"
+        )
+        ttk.Label(test_frame, textvariable=self.test_status_var).grid(row=2, column=3, padx=8, pady=(0, 8), sticky="w")
+
+        ttk.Label(
+            test_frame,
+            text="Sequential: 等待回应后再发送。Interval: 固定间隔发送，高压测试。",
+            wraplength=760,
+            justify="left",
+        ).grid(row=3, column=0, columnspan=4, padx=8, pady=(0, 8), sticky="w")
 
         quick_frame = ttk.LabelFrame(command_frame, text="Quick Commands")
         quick_frame.grid(row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8))
@@ -210,7 +260,7 @@ class PCLoraGUI(tk.Tk):
             return None
 
         try:
-            conn = serial.Serial(port=port, baudrate=baud, timeout=0, write_timeout=0.5)
+            conn = serial.Serial(port=port, baudrate=baud, timeout=0.1, write_timeout=0.5)
             try:
                 conn.reset_input_buffer()
                 conn.reset_output_buffer()
@@ -252,6 +302,10 @@ class PCLoraGUI(tk.Tk):
             self._update_status()
 
     def poll_serial(self) -> None:
+        if self.test_running:
+            self.after(100, self.poll_serial)
+            return
+
         if self.conn is not None:
             try:
                 waiting = self.conn.in_waiting
@@ -300,6 +354,229 @@ class PCLoraGUI(tk.Tk):
         self.rx_text.configure(state="normal")
         self.rx_text.delete("1.0", "end")
         self.rx_text.configure(state="disabled")
+
+    def _valid_int(self, text: str, default: int) -> int:
+        try:
+            value = int(text.strip())
+            return max(1, value)
+        except ValueError:
+            return default
+
+    def _valid_float(self, text: str, default: float) -> float:
+        try:
+            value = float(text.strip())
+            return max(0.0, value)
+        except ValueError:
+            return default
+
+    def _update_test_status(self, text: str) -> None:
+        self.test_status_var.set(text)
+
+    def _read_verified_line(self, timeout_s: float) -> str | None:
+        if self.conn is None:
+            return None
+
+        deadline = time.monotonic() + timeout_s
+        buffer = self.test_rx_buffer
+
+        while time.monotonic() < deadline and self.test_running:
+            try:
+                chunk = self.conn.read(1024)
+            except (SerialException, OSError):
+                return None
+
+            if not chunk:
+                continue
+
+            buffer.extend(chunk)
+            while b"\n" in buffer:
+                raw_line, _, rest = buffer.partition(b"\n")
+                buffer[:] = rest
+                try:
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                except UnicodeDecodeError:
+                    continue
+
+                if not line:
+                    continue
+
+                if line.startswith("RX:"):
+                    payload = line[3:].strip()
+                    if payload.startswith(("RESP:", "DATA:")) or is_compact_frame(payload):
+                        return payload
+        return None
+
+    def start_latency_test(self) -> None:
+        if self.conn is None:
+            messagebox.showwarning("Not connected", "Connect the PC_Lora port first.")
+            return
+
+        if self.test_running:
+            messagebox.showinfo("Test running", "A latency test is already in progress.")
+            return
+
+        self.test_running = True
+        self.test_button.configure(state="disabled")
+        self._update_test_status("Running...")
+        self.log_rx("Starting latency test", "info")
+        thread = threading.Thread(target=self._run_latency_test, daemon=True)
+        thread.start()
+
+    def _run_latency_test(self) -> None:
+        mode = self.test_mode_var.get()
+        interval_s = self._valid_float(self.test_interval_var.get(), 0.25)
+        attempts = self._valid_int(self.test_attempts_var.get(), 10)
+        repeats = self._valid_int(self.test_repeats_var.get(), 5)
+        commands = list(REQUEST_TO_CODE.keys())
+
+        all_results: dict[str, list[int | None]] = {cmd: [] for cmd in commands}
+
+        for repeat_index in range(1, repeats + 1):
+            self.after(0, self.log_rx, f"Starting repeat {repeat_index}/{repeats}", "info")
+            if mode == "sequential":
+                round_results = self._run_round_sequential(commands, attempts, interval_s)
+            else:
+                round_results = self._run_round_interval(commands, attempts, interval_s)
+            for command, values in round_results.items():
+                all_results[command].extend(values)
+
+        self.after(0, self._print_latency_summary, all_results)
+        self.last_latency_results = all_results
+        self.test_running = False
+        self.after(0, self.test_button.configure, state="normal")
+        self.after(0, self._update_test_status, "Ready")
+        self.after(0, self.log_rx, "Latency test complete", "info")
+
+    def _run_round_sequential(self, commands: list[str], attempts: int, interval_s: float) -> dict[str, list[int | None]]:
+        round_results: dict[str, list[int | None]] = {cmd: [] for cmd in commands}
+
+        for command in commands:
+            self.after(0, self.log_rx, f"\n=== Command: {command} ===", "info")
+            for attempt in range(1, attempts + 1):
+                wire_command, label = format_tx_text(command)
+                if not wire_command:
+                    self.after(0, self.log_rx, f"  [ERROR] Cannot encode command: {command}", "error")
+                    round_results[command].append(None)
+                    continue
+
+                try:
+                    self.conn.write((wire_command + "\n").encode("utf-8"))
+                    self.conn.flush()
+                except (SerialException, OSError) as exc:
+                    self.after(0, self.log_rx, f"  [ERROR] Write failed for {command}: {exc}", "error")
+                    round_results[command].append(None)
+                    continue
+
+                sent_at = time.monotonic()
+                timeout_s = COMMAND_TIMEOUT_MS / 1000.0
+                response = self._read_verified_line(timeout_s)
+                elapsed_ms = int((time.monotonic() - sent_at) * 1000)
+
+                if response is None:
+                    self.after(0, self.log_rx, f"  attempt {attempt:02d}: TIMEOUT (> {timeout_s:.1f}s)", "error")
+                    round_results[command].append(None)
+                else:
+                    self.after(0, self.log_rx, f"  attempt {attempt:02d}: {elapsed_ms} ms -> {response}", "remote")
+                    round_results[command].append(elapsed_ms)
+
+                time.sleep(interval_s)
+
+        return round_results
+
+    def _run_round_interval(self, commands: list[str], attempts: int, interval_s: float) -> dict[str, list[int | None]]:
+        round_results: dict[str, list[int | None]] = {cmd: [] for cmd in commands}
+        pending: list[tuple[str, float]] = []
+
+        for command in commands:
+            self.after(0, self.log_rx, f"\n=== Command: {command} ===", "info")
+            for attempt in range(1, attempts + 1):
+                wire_command, label = format_tx_text(command)
+                if not wire_command:
+                    self.after(0, self.log_rx, f"  [ERROR] Cannot encode command: {command}", "error")
+                    round_results[command].append(None)
+                    continue
+
+                try:
+                    self.conn.write((wire_command + "\n").encode("utf-8"))
+                    self.conn.flush()
+                except (SerialException, OSError) as exc:
+                    self.after(0, self.log_rx, f"  [ERROR] Write failed for {command}: {exc}", "error")
+                    round_results[command].append(None)
+                    continue
+
+                sent_at = time.monotonic()
+                pending.append((command, sent_at))
+                interval_end = sent_at + interval_s
+
+                while time.monotonic() < interval_end and self.test_running:
+                    response = self._read_verified_line(min(0.1, interval_end - time.monotonic()))
+                    if response is None:
+                        continue
+                    if pending:
+                        pending_command, command_sent_at = pending.pop(0)
+                        latency_ms = int((time.monotonic() - command_sent_at) * 1000)
+                        self.after(0, self.log_rx, f"  attempt {attempt:02d}: {pending_command} -> {latency_ms} ms -> {response}", "remote")
+                        round_results[pending_command].append(latency_ms)
+
+        timeout_s = COMMAND_TIMEOUT_MS / 1000.0
+        deadline = time.monotonic() + timeout_s
+
+        while pending and self.test_running and time.monotonic() < deadline:
+            response = self._read_verified_line(0.1)
+            if response is None:
+                continue
+            pending_command, command_sent_at = pending.pop(0)
+            latency_ms = int((time.monotonic() - command_sent_at) * 1000)
+            self.after(0, self.log_rx, f"  {pending_command} -> {latency_ms} ms -> {response}", "remote")
+            round_results[pending_command].append(latency_ms)
+
+        while pending:
+            pending_command, _ = pending.pop(0)
+            self.after(0, self.log_rx, f"  {pending_command} timed out", "error")
+            round_results[pending_command].append(None)
+
+        return round_results
+
+    def _print_latency_summary(self, all_results: dict[str, list[int | None]]) -> None:
+        self.log_rx("\n=== Latency Summary ===", "info")
+        header = f"{'Command':<12} {'Runs':>4} {'Success':>7} {'Avg(ms)':>8} {'Min(ms)':>8} {'Max(ms)':>8}"
+        self.log_rx(header, "info")
+        self.log_rx("-" * len(header), "info")
+
+        for command, latencies in all_results.items():
+            success_values = [value for value in latencies if value is not None]
+            success_count = len(success_values)
+            total_count = len(latencies)
+            avg = int(sum(success_values) / success_count) if success_count else 0
+            min_v = min(success_values) if success_values else 0
+            max_v = max(success_values) if success_values else 0
+            self.log_rx(f"{command:<12} {total_count:>4} {success_count:>7} {avg:>8} {min_v:>8} {max_v:>8}", "info")
+
+    def export_latency_csv(self) -> None:
+        if not self.last_latency_results:
+            messagebox.showwarning("No data", "Please run a latency test before exporting CSV.")
+            return
+
+        path = filedialog.asksaveasfilename(
+            title="Save latency results as CSV",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "w", encoding="utf-8", newline="") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(["command", "attempt", "latency_ms"])
+                for command, latencies in self.last_latency_results.items():
+                    for idx, latency in enumerate(latencies, start=1):
+                        writer.writerow([command, idx, "" if latency is None else latency])
+            messagebox.showinfo("CSV exported", f"Latency CSV saved to:\n{path}")
+            self.log_rx(f"Exported latency CSV to {path}", "info")
+        except OSError as exc:
+            messagebox.showerror("Save failed", str(exc))
+            self.log_rx(f"CSV export failed: {exc}", "error")
 
     def log_tx(self, message: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -424,6 +701,7 @@ class PCLoraGUI(tk.Tk):
         self.set_indicator(self.accel_indicator, "warn")
 
     def on_close(self) -> None:
+        self.test_running = False
         self._close_conn()
         self.destroy()
 

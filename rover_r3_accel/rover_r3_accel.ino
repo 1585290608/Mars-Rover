@@ -6,6 +6,7 @@
 Adafruit_MMA8451 mma = Adafruit_MMA8451();
 
 String commandLine;
+String usbCommandLine;
 String currentMotion = "STOP";
 
 const int LORA_RX_PIN = 2;
@@ -20,6 +21,8 @@ const int RIGHT_IN2 = 11;
 const int LED_PIN = 13;
 
 bool imuReady = false;
+const int ACCEL_INIT_RETRIES = 6;
+const unsigned long ACCEL_INIT_DELAY_MS = 300;
 
 struct CommandEntry {
   const char *code;
@@ -63,6 +66,11 @@ void emitResponse(const String &code, const String &text, const String &payload 
 
 void debugLog(const String &text) {
   Serial.print("DEBUG:");
+  Serial.println(text);
+}
+
+void debugError(const String &text) {
+  Serial.print("ERROR:");
   Serial.println(text);
 }
 
@@ -131,9 +139,12 @@ void rotateRight() {
 }
 
 bool probeAccel(bool announceResult) {
+  debugLog("MMA8451 probe start");
   if (mma.begin()) {
     imuReady = true;
     mma.setRange(MMA8451_RANGE_2_G);
+    debugLog("MMA8451 initialized");
+    debugLog("MMA8451 range=2G");
     if (announceResult) {
       emitResponse("9E", "ACCEL_OK");
     }
@@ -141,10 +152,50 @@ bool probeAccel(bool announceResult) {
   }
 
   imuReady = false;
+  debugError("MMA8451 not found on I2C");
   if (announceResult) {
     emitResponse("9D", "MMA8451_OFFLINE");
   }
   return false;
+}
+
+bool ensureAccelReady(bool announceResult) {
+  if (imuReady) {
+    return true;
+  }
+
+  for (int attempt = 0; attempt < ACCEL_INIT_RETRIES; ++attempt) {
+    debugLog(String("MMA8451 probe attempt=") + (attempt + 1));
+    if (probeAccel(false)) {
+      if (announceResult) {
+        emitResponse("9E", "ACCEL_OK");
+      }
+      return true;
+    }
+    delay(ACCEL_INIT_DELAY_MS);
+  }
+
+  if (announceResult) {
+    emitResponse("9D", "MMA8451_OFFLINE");
+  }
+  return false;
+}
+
+bool readAccelPayload(String &payload) {
+  if (!ensureAccelReady(false)) {
+    return false;
+  }
+
+  sensors_event_t event;
+  mma.getEvent(&event);
+
+  float ax = event.acceleration.x;
+  float ay = event.acceleration.y;
+  float az = event.acceleration.z;
+
+  payload = String(ax, 3) + "," + String(ay, 3) + "," + String(az, 3);
+  debugLog(String("ACCEL_MPS2:") + payload);
+  return true;
 }
 
 void setup() {
@@ -162,23 +213,34 @@ void setup() {
   stopMotors();
   debugLog("R3 accel bridge on SoftwareSerial D2/D3");
   debugLog(String("R3 bridge baud=") + BRIDGE_BAUD);
+  debugLog("USB local commands enabled");
+  debugLog("Try local commands: READ_ACCEL, STATUS, HELLO");
 
-  for (int attempt = 0; attempt < 4; ++attempt) {
-    if (probeAccel(false)) {
-      emitResponse("9E", "ACCEL_OK");
-      break;
-    }
-    delay(250);
-  }
-
-  if (!imuReady) {
-    emitResponse("9D", "MMA8451_OFFLINE");
+  if (!ensureAccelReady(true)) {
+    debugError("MMA8451 remained offline after retries");
   }
 
   emitResponse("A0", "R3_BOOT_OK");
 }
 
 void loop() {
+  while (Serial.available()) {
+    char c = static_cast<char>(Serial.read());
+    if (c == '\r') {
+      continue;
+    }
+    if (c == '\n') {
+      usbCommandLine.trim();
+      if (usbCommandLine.length() > 0) {
+        debugLog(String("USB_CMD=") + usbCommandLine);
+        handleCommand(usbCommandLine);
+        usbCommandLine = "";
+      }
+      continue;
+    }
+    usbCommandLine += c;
+  }
+
   while (bridgeSerial.available()) {
     char c = static_cast<char>(bridgeSerial.read());
     if (c == '\r') {
@@ -219,16 +281,12 @@ void handleCommand(String incoming) {
   }
 
   if (cmd == "READ_ACCEL") {
-    if (!imuReady && !probeAccel(false)) {
+    String payload = "";
+    if (!readAccelPayload(payload)) {
       emitResponse("9C", "ACCEL_OFFLINE");
       return;
     }
 
-    sensors_event_t event;
-    mma.getEvent(&event);
-    String payload = String(event.acceleration.x, 3) + "," +
-                     String(event.acceleration.y, 3) + "," +
-                     String(event.acceleration.z, 3);
     emitResponse("8C", String("ACCEL:") + payload, payload);
     return;
   }

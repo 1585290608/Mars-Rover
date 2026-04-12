@@ -195,3 +195,33 @@
 - `DEBUG:R3 bridge baud=4800`
 - `DEBUG:CMD=STATUS`
 - `RESP:...`
+
+## 当前状态与推荐流程
+
+1. 运行 `python pc_lora_gui.py`，只连接 `PC_Lora`。
+2. 从串口列表选择 `PC_Lora` COM 端口，波特率保持 `9600`。
+3. 首先测试 `HELLO`，确认真实远端回包 `RX: RESP:HELLO_OK`。
+4. 继续测试 `STATUS`、`READ_ACCEL`、`LED_ON`、`LED_OFF`。
+5. 如果没有真正上电 `Rover_Lora`/`Rover_R3`，GUI 应显示超时而不是假接收。
+
+## 延迟测试与 CSV 导出
+
+- `pc_lora_gui.py` 已集成延迟测试功能。
+- 测试模式有：
+  - `sequential`：等候每条指令回复后再发送下一条。
+  - `interval`：按固定时间间隔发送，用于高压力发送测试。
+- 测试完成后，可点击 `Export CSV` 将每次尝试和延迟结果保存为 `.csv`。
+- 这可以用于对比不同命令、间隔和重试次数下的表现。
+
+## 重要硬件提醒
+
+- `UNO R3` 的 `3.3V` 引脚通常不能稳定为 LoRa 模块供电，建议使用独立的 `3.3V` 稳压模块或专用电源。
+- `Rover_R3` 与 `Rover_Lora` 的 UART 通信必须使用 `D2`/`D3`，波特率为 `4800`。请不要把 `Rover_Lora` 直连到 `D0`/`D1`，那是 USB 串口调试口，会造成串口冲突和丢包。
+- `Rover_Lora` 的 USB 仅用于监看 `TRACE:` 日志，不应作为 LoRa 控制路径。
+- `PC_Lora` 的 USB 供电应稳定，GUI 的主链路是 `PC -> PC_Lora -> LoRa -> Rover_Lora`。
+
+## 关键判断规则
+
+- 只有 `RX: RESP:...` 和 `RX: DATA:...` 才被视作真实远端回复。
+- `TRACE:`、`TX:` 和未带 `RX:` 前缀的本地串口输出都不计为成功。
+- 这保证 GUI 不会因为本地串口日志而误报“已收到”。

@@ -1,11 +1,12 @@
-#include <MKRWAN.h>
-
-LoRaModem modem;
+#include <SPI.h>
+#include <LoRa.h>
 
 const unsigned long USB_BAUD = 9600;
-const int MODEM_DATA_RATE = 5;
-const int MODEM_PORT = 1;
-const int MODEM_CHANNEL = 0;
+// Change this on both MKR WAN 1310 boards to match your legal regional band.
+const long LORA_FREQUENCY_HZ = 868E6;
+const byte LORA_SYNC_WORD = 0x34;
+const byte LOCAL_ADDRESS = 0xBB;
+const byte REMOTE_ADDRESS = 0xCC;
 
 String usbLine;
 
@@ -25,6 +26,14 @@ bool looksLikeCompactFrame(const String &text) {
   }
 
   return text.length() == 2 || text.charAt(2) == '|';
+}
+
+String hexByte(byte value) {
+  const char *digits = "0123456789ABCDEF";
+  String out = "";
+  out += digits[(value >> 4) & 0x0F];
+  out += digits[value & 0x0F];
+  return out;
 }
 
 String encodeCommand(const String &payload) {
@@ -55,14 +64,12 @@ void trace(const String &message) {
   Serial.println(message);
 }
 
-bool configureModem() {
-  if (!modem.begin(EU868)) {
+bool configureRadio() {
+  if (!LoRa.begin(LORA_FREQUENCY_HZ)) {
     return false;
   }
 
-  modem.dataRate(MODEM_DATA_RATE);
-  modem.setPort(MODEM_PORT);
-  modem.setChannel(MODEM_CHANNEL);
+  LoRa.setSyncWord(LORA_SYNC_WORD);
   return true;
 }
 
@@ -75,7 +82,7 @@ void setup() {
   delay(2000);
   trace("BOOT:PC_LORA_START");
 
-  if (!configureModem()) {
+  if (!configureRadio()) {
     trace("LORA_INIT_FAILED");
     while (1) {
       delay(1000);
@@ -83,9 +90,12 @@ void setup() {
   }
 
   trace("LORA_INIT_OK");
-  trace(String("MODEM_DR:") + MODEM_DATA_RATE);
-  trace(String("MODEM_PORT:") + MODEM_PORT);
-  trace(String("MODEM_CHANNEL:") + MODEM_CHANNEL);
+  trace("LIB:ARDUINO_LORA");
+  trace("MURATA_FW_REQ:1.1.6_PLUS");
+  trace(String("LORA_FREQUENCY_HZ:") + LORA_FREQUENCY_HZ);
+  trace(String("LORA_SYNC_WORD:0x") + hexByte(LORA_SYNC_WORD));
+  trace(String("LOCAL_ADDRESS:0x") + hexByte(LOCAL_ADDRESS));
+  trace(String("REMOTE_ADDRESS:0x") + hexByte(REMOTE_ADDRESS));
   trace("READY:TYPE_COMMAND_AND_PRESS_ENTER");
 }
 
@@ -106,12 +116,33 @@ void loop() {
     usbLine += c;
   }
 
-  int packetSize = modem.parsePacket();
+  int packetSize = LoRa.parsePacket();
   if (packetSize > 0) {
-    String incoming = modem.readString();
+    if (packetSize < 2) {
+      while (LoRa.available()) {
+        LoRa.read();
+      }
+      trace(String("DROP_SHORT_LORA_PACKET:") + packetSize);
+      return;
+    }
+
+    byte recipient = static_cast<byte>(LoRa.read());
+    byte sender = static_cast<byte>(LoRa.read());
+    String incoming = "";
+    while (LoRa.available()) {
+      incoming += static_cast<char>(LoRa.read());
+    }
     incoming.trim();
     incoming.toUpperCase();
     if (incoming.length() > 0) {
+      trace(
+          String("LORA_RX_META:TO=0x") + hexByte(recipient) +
+          ",FROM=0x" + hexByte(sender) +
+          ",RSSI=" + LoRa.packetRssi());
+      if (recipient != LOCAL_ADDRESS) {
+        trace(String("DROP_OTHER_RECIPIENT:0x") + hexByte(recipient));
+        return;
+      }
       if (incoming.startsWith("RESP:") || incoming.startsWith("DATA:") || looksLikeCompactFrame(incoming)) {
         Serial.print("RX: ");
         Serial.println(incoming);
@@ -132,11 +163,19 @@ void sendLoRa(const String &payload) {
     trace(String("ENCODE:") + payload + "->" + wirePayload);
   }
 
-  trace(String("LOCAL_TX:") + wirePayload);
-  modem.beginPacket();
-  modem.print(wirePayload);
-  int result = modem.endPacket(false);
-  if (result <= 0) {
+  trace(
+      String("LOCAL_TX:TO=0x") + hexByte(REMOTE_ADDRESS) +
+      ",FROM=0x" + hexByte(LOCAL_ADDRESS) +
+      ",PAYLOAD=" + wirePayload);
+  if (!LoRa.beginPacket()) {
+    trace(String("TX_BUSY:") + wirePayload);
+    return;
+  }
+  LoRa.write(REMOTE_ADDRESS);
+  LoRa.write(LOCAL_ADDRESS);
+  LoRa.print(wirePayload);
+  int result = LoRa.endPacket();
+  if (!result) {
     trace(String("TX_FAIL:") + wirePayload);
   }
 }
