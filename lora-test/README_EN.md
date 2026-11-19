@@ -1,19 +1,30 @@
-# GUI/11 LoRa Control Test
+# LoRa Debug & Fix
 
-This folder is now used to verify the following actual link:
+GUI-11 is a standalone Python/Tkinter tool for finding and fixing communication faults on the physical Mars Rover. It verifies the round trip from the PC GUI through both LoRa boards and the rover-side UART to the Uno R3, then back to the PC. [中文说明](README.md)
 
-`GUI -> PC USB -> PC_Lora -> LoRa -> Rover_Lora -> UART -> Rover_R3`
+The separate [Rover Control Station (D15)](../rover-control-station/) is the main operator interface prototype. Each application has its own entry point and dependencies.
 
-Only when this full chain works should the GUI show "received response" and latency.
+## What the tool checks
 
-## Recommended test focus
+1. Run `pc_lora_gui.py` from this folder. Connect the PC-side LoRa board and send `HELLO` or `STATUS`. This checks whether the Uno can receive a request and return a recognised reply across the full link.
+2. Test `READ_ACCEL` and `LED_ON` / `LED_OFF` to check sensor readback and command execution. The GUI keeps these tests separate from motion commands so the bench test can focus on communications.
+3. Check the PC log for `RX: RESP:...` or `RX: DATA:...`. These are the replies the GUI accepts for success and latency. The rover-side USB connection can show `TRACE:` messages for troubleshooting. Its command bypass was disabled so a local USB reply cannot count as a wireless success.
+4. Compare the rover traces when a command times out. `LORA_RX` shows that the rover radio received the request. `UART_TX` shows that it was forwarded to the Uno. `R3_RX` shows that the rover bridge read a line from the Uno. `R3_TIMEOUT` shows that the bridge did not receive an accepted reply in time.
 
-For this round of debugging, only two function categories are suggested:
+## Fix applied during final integration
 
-- `accelerometer`
-- `LED`
+After testing the wireless leg separately, the team could narrow the fault to the rover-side UART. The implemented fix moved that link to SoftwareSerial on the Uno R3’s D2/D3 pins at 4,800 baud, leaving D0/D1 available for USB debugging. This restored remote command execution in about 10 minutes during final integration. The shared battery-fed power path under motor load was a suspected contributor.
 
-Motor-related commands are still present in firmware, but the GUI no longer places them in the main test button by default to avoid interfering with the current link validation.
+## Run the diagnostic GUI
+
+From `lora-test/`:
+
+```sh
+python -m pip install -r requirements.txt
+python pc_lora_gui.py
+```
+
+The GUI can log timeouts and export command-response latency tests to CSV. See the [wiring notes](WIRING_AND_SENSORS.md), [full debug report](LORA_DEBUG_REPORT_EN.md) and [bench-test data](latency_data/).
 
 ## Compact command protocol
 

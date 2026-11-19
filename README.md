@@ -1,20 +1,20 @@
 # Mars Rover
 
-This repository contains two independent desktop applications from the Cardiff University Mars Rover project.
+Two independent desktop applications from the Cardiff University Mars Rover project.
 
-| Application | What it does | Run from its folder |
+| Application | Purpose | Run from its folder |
 | --- | --- | --- |
-| [Rover Control Station](rover-control-station/) | D15 operator interface prototype for viewing telemetry, tracking commands, logging sessions and replaying recorded accelerometer data | `python main.py` |
-| [LoRa Test & Diagnostics](lora-test/) | GUI-11 hardware test utility for checking the PC-to-rover LoRa and UART link | `python pc_lora_gui.py` |
+| [Rover Control Station](rover-control-station/) (D15) | Main operator interface prototype for telemetry, session logging and replay | `python main.py` |
+| [LoRa Debug & Fix](lora-test/README_EN.md) (GUI-11) | Hardware diagnostic tool for isolating faults in the LoRa and UART command-and-response chain | `python pc_lora_gui.py` |
 
 ## Rover Control Station
 
-The main desktop interface uses PyQt6 and Matplotlib. This snapshot uses simulated telemetry and command acknowledgements to exercise the interface. It also supports replay from an accelerometer CSV recorded by the app.
+D15 is the PyQt6 and Matplotlib desktop interface. It has its own entry point and dependencies. This snapshot uses simulated telemetry and command acknowledgements and can replay accelerometer CSVs saved by the app. [Setup and features](rover-control-station/README.md)
 
-See the [Rover Control Station setup](rover-control-station/README.md).
+## LoRa Debug & Fix
 
-## LoRa Test & Diagnostics
+GUI-11 is a separate Tkinter tool built to diagnose the physical PC-to-rover link. It tests a small set of commands and counts only verified wireless replies. The rover-side trace shows whether the radio received the request, whether it was forwarded over UART, and whether the Uno replied. This made it possible to investigate the radio link and the onboard serial link separately.
 
-The separate Tkinter utility was used on physical hardware to check remote LED control, status replies and accelerometer readback. It contains the Arduino sketches, wiring notes and bench-test data. Testing the link independently helped locate an integration fault. Moving the rover-side UART to SoftwareSerial on the Uno R3’s D2/D3 pins at 4,800 baud restored remote command execution in about 10 minutes during final integration.
+During final integration, moving the rover-side UART to SoftwareSerial on the Uno R3’s D2/D3 pins at 4,800 baud restored remote command execution in about 10 minutes.
 
-See the [LoRa test setup in English](lora-test/README_EN.md) or the [Chinese test notes](lora-test/README.md).
+[Debug workflow and setup](lora-test/README_EN.md) · [中文说明](lora-test/README.md) · [Full debug report](lora-test/LORA_DEBUG_REPORT_EN.md)

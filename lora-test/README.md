@@ -1,17 +1,30 @@
-# GUI/11 LoRa Control Test
+# LoRa Debug & Fix
 
-这个目录现在用于验证下面这条真实链路：
+GUI-11 是一个独立的 Python/Tkinter 实车诊断工具，用来排查 Mars Rover 的 LoRa 和 UART 通信故障。它检查的是完整的请求和回复路径。命令由 PC 发出，经两块 LoRa 板和车端 UART 到达 Uno R3，回复再返回 PC。[English guide](README_EN.md)
 
-`GUI -> PC USB -> PC_Lora -> LoRa -> Rover_Lora -> UART -> Rover_R3`
+[Rover Control Station（D15）](../rover-control-station/) 是另一个独立的主操作界面原型。两个程序有各自的启动入口和依赖。
 
-只有这条链路走通，GUI 才应该显示“收到回复”与延迟。
+## 怎么定位故障
 
-当前这轮联调建议只测两类功能：
+1. 在 `lora-test/` 运行 `pc_lora_gui.py`，连接 PC 端 LoRa 板。先发 `HELLO` 或 `STATUS`，核对 Uno 能否收到命令并经完整链路返回有效回复。
+2. 再用 `READ_ACCEL` 检查传感器读回，用 `LED_ON` 和 `LED_OFF` 检查实车指令执行。默认测试集中在通信链路，便于排除运动相关因素。
+3. GUI 只把 PC 端日志中的 `RX: RESP:...` 和 `RX: DATA:...` 计作有效回复并记录延迟。车端 USB 保留 `TRACE:` 日志供排查，USB 直通命令旁路已关闭，因此本地回显不会被计作无线通信成功。
+4. 如果超时，可以对照车端记录定位环节。`LORA_RX` 表示车端 LoRa 已接收请求，`UART_TX` 表示请求已转发给 Uno，`R3_RX` 表示车端桥接板收到了 Uno 的一行数据，`R3_TIMEOUT` 表示在时限内未收到它认可的回复。
 
-- `accelerometer`
-- `LED`
+## 最终集成时采用的修复
 
-电机相关命令仍保留在固件里，但 GUI 现在默认不再把它们放在主测试按钮里，避免干扰你当前的链路验证。
+单独验证无线链路后，排查范围收窄到车端 UART。实际修复是将车端 UART 改到 Uno R3 的 D2/D3，用 SoftwareSerial 以 4,800 baud 通信，将 D0/D1 留给 USB 调试。这个改动在最终集成时约 10 分钟恢复了远程指令执行。电机负载下的共享电池供电路径是一个可能诱因。
+
+## 启动诊断工具
+
+在 `lora-test/` 中运行：
+
+```sh
+python -m pip install -r requirements.txt
+python pc_lora_gui.py
+```
+
+工具可以记录超时，并把命令往返延迟测试导出为 CSV。[接线说明](WIRING_AND_SENSORS.md) · [完整排障报告](LORA_DEBUG_REPORT.md) · [台架测试数据](latency_data/)
 
 ## 紧凑命令协议
 
