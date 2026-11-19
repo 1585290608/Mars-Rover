@@ -1,3 +1,5 @@
+**English** · [简体中文](README.zh-CN.md)
+
 # Mars Rover
 
 Two independent desktop applications from the Cardiff University Mars Rover project.
@@ -5,7 +7,7 @@ Two independent desktop applications from the Cardiff University Mars Rover proj
 | Application | Purpose | Run from its folder |
 | --- | --- | --- |
 | [Rover Control Station](rover-control-station/) (D15) | Main operator interface prototype for telemetry, session logging and replay | `python main.py` |
-| [LoRa Debug & Fix](lora-test/README_EN.md) (GUI-11) | Hardware diagnostic tool for isolating faults in the LoRa and UART command-and-response chain | `python pc_lora_gui.py` |
+| [LoRa Debug & Fix](lora-test/README.md) (GUI-11) | Hardware diagnostic tool for isolating faults in the LoRa and UART command-and-response chain | `python pc_lora_gui.py` |
 
 ## Rover Control Station
 
@@ -17,4 +19,4 @@ GUI-11 is a separate Tkinter tool built to diagnose the physical PC-to-rover lin
 
 During final integration, moving the rover-side UART to SoftwareSerial on the Uno R3’s D2/D3 pins at 4,800 baud restored remote command execution in about 10 minutes.
 
-[Debug workflow and setup](lora-test/README_EN.md) · [中文说明](lora-test/README.md) · [Full debug report](lora-test/LORA_DEBUG_REPORT_EN.md)
+[Debug workflow and setup](lora-test/README.md) · [Full debug report](lora-test/LORA_DEBUG_REPORT_EN.md)

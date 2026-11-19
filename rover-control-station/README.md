@@ -1,3 +1,5 @@
+**English** · [简体中文](README.zh-CN.md)
+
 # Rover Control Station
 
 D15 is the main desktop operator interface prototype for the Mars Rover project, developed in Python with PyQt6 and Matplotlib. It runs as a standalone application with its own entry point and dependencies. D15 identifies the original snapshot.
@@ -17,4 +19,4 @@ The interface includes telemetry plots, command acknowledgement and retry handli
 
 The optional XOR mode is a protocol demonstration in the simulator. It is disabled by default and uses a public demonstration value.
 
-For bench testing with the physical Arduino and LoRa hardware, use the separate [LoRa Debug & Fix application](../lora-test/README_EN.md).
+For bench testing with the physical Arduino and LoRa hardware, use the separate [LoRa Debug & Fix application](../lora-test/README.md).

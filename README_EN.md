@@ -1,3 +1,3 @@
-# LoRa Test setup (English)
+# Mars Rover documentation
 
-The guide is now in [`lora-test/README_EN.md`](lora-test/README_EN.md).
+See the [project README](README.md) and the [LoRa Debug & Fix guide](lora-test/README.md).

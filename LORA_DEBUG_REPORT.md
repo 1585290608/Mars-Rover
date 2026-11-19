@@ -1,3 +1,3 @@
-# LoRa Test debug report (Chinese)
+# LoRa Debug & Fix report
 
-The guide is now in [`lora-test/LORA_DEBUG_REPORT.md`](lora-test/LORA_DEBUG_REPORT.md).
+See the [English debug report](lora-test/LORA_DEBUG_REPORT_EN.md) and [Chinese LoRa README](lora-test/README.zh-CN.md).
